@@ -41,7 +41,7 @@ G710Keys 是协议的现代重写版，并额外提供图形界面和「按键�
 需要 Xcode Command Line Tools：
 
 ```bash
-git clone https://github.com/<you>/G710Keys.git
+git clone https://github.com/jk8978/logitech-g710-macos.git
 cd G710Keys
 ./scripts/build.sh      # 生成 build/G710Keys.app（ad-hoc 签名）
 ./scripts/install.sh    # 安装到 /Applications 并启动

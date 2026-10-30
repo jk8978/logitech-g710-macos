@@ -45,7 +45,7 @@ G710Keys does not touch them. It only handles the G keys and the M profile keys.
 Requires Xcode Command Line Tools (`xcode-select --install`) and Swift 5+.
 
 ```bash
-git clone https://github.com/<you>/G710Keys.git
+git clone https://github.com/jk8978/logitech-g710-macos.git
 cd G710Keys
 ./scripts/build.sh          # -> build/G710Keys.app (ad-hoc signed)
 open build/G710Keys.app
