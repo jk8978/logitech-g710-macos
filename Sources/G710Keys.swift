@@ -208,6 +208,7 @@ func describeTextEvents(_ s: String) -> String {
 
 func perform(_ b: Binding) {
     if let t = b.text, !t.isEmpty {
+        log("text macro fire: \(t.count) chars \(String(reflecting: t))")
         postText(t, intervalMs: config.typeIntervalMs ?? 15)
     }
     if let k = b.key, let code = keyMap[k.lowercased()] {
@@ -471,6 +472,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     var recordingIndex: Int?
     var recordButtons: [NSButton] = []
     var localMonitor: Any?
+    var lastStateLog: String?
 
     func applicationDidFinishLaunching(_ n: Notification) {
         loadConfig()
@@ -841,6 +843,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         axLabel?.stringValue = "辅助功能：" + (axOK ? "已授权 ✓" : "未授权 ✗（合成按键需要）")
         inputLabel?.textColor = inputOK ? NSColor.labelColor : NSColor.systemRed
         axLabel?.textColor = axOK ? NSColor.labelColor : NSColor.systemRed
+        let state = "input=\(inputOK) ax=\(axOK) connected=\(Engine.shared.connected) profile=M\(Engine.shared.profile)"
+        if state != lastStateLog {
+            lastStateLog = state
+            log("state: " + state)
+        }
     }
 }
 
