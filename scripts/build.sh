@@ -15,6 +15,7 @@ swiftc -O -swift-version 5 Sources/G710Keys.swift \
 cp packaging/Info.plist "$APP/Contents/Info.plist"
 cp Resources/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
 
-echo "==> ad-hoc signing"
-codesign --force --deep --sign - "$APP"
+IDENTITY="${CODESIGN_IDENTITY:--}"
+echo "==> signing with: $IDENTITY"
+codesign --force --deep --sign "$IDENTITY" "$APP"
 codesign -v --deep --strict "$APP" && echo "==> ok: $APP"

@@ -24,20 +24,30 @@ struct Binding: Codable {
     var key: String?
     var mods: [String]?
     var shell: String?
-    var isEmpty: Bool { (key ?? "").isEmpty && (shell ?? "").isEmpty }
+    // 文本宏：按下 G 键后依次输入这些字符（例如 "111111"）
+    var text: String? = nil
+    var isEmpty: Bool {
+        (key ?? "").isEmpty && (shell ?? "").isEmpty && (text ?? "").isEmpty
+    }
+    // 只有单键/组合键支持长按重复，文本宏和 shell 不重复触发
+    var isRepeatable: Bool {
+        !(key ?? "").isEmpty && (text ?? "").isEmpty && (shell ?? "").isEmpty
+    }
 }
 struct Config: Codable {
     var profiles: [String: [Binding]]
     var repeatEnabled: Bool?
     var repeatDelayMs: Int?
     var repeatIntervalMs: Int?
+    // 文本宏每个字符之间的间隔（毫秒），默认 15
+    var typeIntervalMs: Int?
 }
 func defaultBindings() -> [Binding] {
     return ["f13", "f14", "f15", "f16", "f17", "f18"].map { Binding(key: $0, mods: nil, shell: nil) }
 }
 func makeDefaultConfig() -> Config {
     return Config(profiles: ["1": defaultBindings(), "2": defaultBindings(), "3": defaultBindings()],
-                  repeatEnabled: true, repeatDelayMs: 400, repeatIntervalMs: 70)
+                  repeatEnabled: true, repeatDelayMs: 400, repeatIntervalMs: 70, typeIntervalMs: 15)
 }
 
 let supportDir = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/G710Keys")
@@ -105,7 +115,101 @@ func postKey(_ code: CGKeyCode, mods: CGEventFlags) {
     usleep(8000)
     up.post(tap: .cghidEventTap)
 }
+// MARK: - Text macro typing
+
+// 把字符映射成 macOS 虚拟键码；第二个值表示是否需要按住 Shift
+let charKeyMap: [Character: (CGKeyCode, Bool)] = {
+    var m: [Character: (CGKeyCode, Bool)] = [:]
+    // 字母
+    for ch in "abcdefghijklmnopqrstuvwxyz" {
+        if let code = keyMap[String(ch)] {
+            m[ch] = (code, false)
+            m[Character(String(ch).uppercased())] = (code, true)
+        }
+    }
+    // 数字与对应 Shift 符号  !@#$%^&*()
+    let digitPairs: [(String, Character, Character)] = [
+        ("1", "1", "!"), ("2", "2", "@"), ("3", "3", "#"), ("4", "4", "$"), ("5", "5", "%"),
+        ("6", "6", "^"), ("7", "7", "&"), ("8", "8", "*"), ("9", "9", "("), ("0", "0", ")")
+    ]
+    for (name, plain, shifted) in digitPairs {
+        if let code = keyMap[name] {
+            m[plain] = (code, false)
+            m[shifted] = (code, true)
+        }
+    }
+    // 标点及其 Shift 版本
+    let punctPairs: [(String, Character, Character)] = [
+        ("minus", "-", "_"), ("equal", "=", "+"),
+        ("leftbracket", "[", "{"), ("rightbracket", "]", "}"),
+        ("backslash", "\\", "|"), ("semicolon", ";", ":"),
+        ("quote", "'", "\""), ("grave", "`", "~"),
+        ("comma", ",", "<"), ("period", ".", ">"), ("slash", "/", "?"),
+        ("space", " ", " ")
+    ]
+    for (name, plain, shifted) in punctPairs {
+        if let code = keyMap[name] {
+            m[plain] = (code, false)
+            m[shifted] = (code, shifted != plain)
+        }
+    }
+    // 空白字符
+    if let code = keyMap["return"] {
+        m["\n"] = (code, false)
+        m["\r"] = (code, false)
+    }
+    if let code = keyMap["tab"] { m["\t"] = (code, false) }
+    return m
+}()
+
+// 用 Unicode 事件输入单个（非 ASCII）字符，例如中文
+func postUnicode(_ s: String) {
+    let utf16 = Array(s.utf16)
+    guard let down = CGEvent(keyboardEventSource: eventSource, virtualKey: 0, keyDown: true),
+          let up = CGEvent(keyboardEventSource: eventSource, virtualKey: 0, keyDown: false) else { return }
+    utf16.withUnsafeBufferPointer { buf in
+        guard let base = buf.baseAddress else { return }
+        down.keyboardSetUnicodeString(stringLength: utf16.count, unicodeString: base)
+        up.keyboardSetUnicodeString(stringLength: utf16.count, unicodeString: base)
+    }
+    down.post(tap: .cghidEventTap)
+    usleep(8000)
+    up.post(tap: .cghidEventTap)
+}
+
+// 依次输入一段文本，每个字符之间留出间隔，让系统/应用把它识别成独立按键
+func postText(_ s: String, intervalMs: Int) {
+    let gap = useconds_t(max(0, min(500, intervalMs)) * 1000)
+    for ch in s {
+        if let (code, shift) = charKeyMap[ch] {
+            var f: CGEventFlags = []
+            if shift { f.insert(.maskShift) }
+            postKey(code, mods: f)
+        } else {
+            postUnicode(String(ch))
+        }
+        if gap > 0 { usleep(gap) }
+    }
+}
+
+// 供自检使用：打印一段文本会被合成成哪些按键事件
+func describeTextEvents(_ s: String) -> String {
+    var lines: [String] = []
+    for ch in s {
+        if let (code, shift) = charKeyMap[ch] {
+            lines.append("'\(ch)' -> keyCode 0x\(String(code, radix: 16)) shift=\(shift)")
+        } else {
+            let scalars = String(ch).unicodeScalars.map { String(format: "U+%04X", $0.value) }
+            lines.append("'\(ch)' -> unicode \(scalars.joined(separator: " "))")
+        }
+    }
+    return lines.joined(separator: "\n")
+}
+
 func perform(_ b: Binding) {
+    if let t = b.text, !t.isEmpty {
+        postText(t, intervalMs: config.typeIntervalMs ?? 15)
+    }
     if let k = b.key, let code = keyMap[k.lowercased()] {
         var f: CGEventFlags = []
         for m in (b.mods ?? []) { if let mf = modFlag(m) { f.insert(mf) } }
@@ -275,7 +379,7 @@ final class Engine {
             for i in 0..<6 where self.heldG & UInt8(1 << i) != 0 {
                 guard let s = self.repeatStart[i] else { continue }
                 if now.timeIntervalSince(s) * 1000 > Double(config.repeatDelayMs ?? 400) {
-                    if i < bs.count, bs[i].shell == nil, !bs[i].isEmpty {
+                    if i < bs.count, bs[i].isRepeatable {
                         perform(bs[i])
                     }
                 }
@@ -287,8 +391,38 @@ final class Engine {
 }
 
 // MARK: - Text helpers
+func escapeTextField(_ s: String) -> String {
+    return s.replacingOccurrences(of: "\\", with: "\\\\")
+        .replacingOccurrences(of: "\n", with: "\\n")
+        .replacingOccurrences(of: "\r", with: "\\r")
+        .replacingOccurrences(of: "\t", with: "\\t")
+}
+func unescapeTextField(_ s: String) -> String {
+    var out = ""
+    let chars = Array(s)
+    var i = 0
+    while i < chars.count {
+        if chars[i] == "\\" && i + 1 < chars.count {
+            switch chars[i + 1] {
+            case "n": out.append("\n")
+            case "r": out.append("\r")
+            case "t": out.append("\t")
+            case "\\": out.append("\\")
+            default:
+                out.append("\\")
+                out.append(chars[i + 1])
+            }
+            i += 2
+        } else {
+            out.append(chars[i])
+            i += 1
+        }
+    }
+    return out
+}
 func bindingToText(_ b: Binding) -> String {
     if let sh = b.shell, !sh.isEmpty { return "shell:" + sh }
+    if let tx = b.text, !tx.isEmpty { return "text:" + escapeTextField(tx) }
     guard let k = b.key, !k.isEmpty else { return "" }
     let mods = (b.mods ?? []).joined(separator: "+")
     return mods.isEmpty ? k : mods + "+" + k
@@ -296,8 +430,14 @@ func bindingToText(_ b: Binding) -> String {
 func textToBinding(_ t: String) -> Binding {
     let s = t.trimmingCharacters(in: .whitespacesAndNewlines)
     if s.isEmpty { return Binding(key: nil, mods: nil, shell: nil) }
-    if s.lowercased().hasPrefix("shell:") {
+    let lower = s.lowercased()
+    if lower.hasPrefix("shell:") {
         return Binding(key: nil, mods: nil, shell: String(s.dropFirst(6)))
+    }
+    if lower.hasPrefix("text:") || lower.hasPrefix("type:") {
+        var raw = String(s.dropFirst(5))
+        if raw.hasPrefix(" ") { raw = String(raw.dropFirst()) }
+        return Binding(key: nil, mods: nil, shell: nil, text: unescapeTextField(raw))
     }
     let parts = s.split(separator: "+").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
     guard !parts.isEmpty else { return Binding(key: nil, mods: nil, shell: nil) }
@@ -312,7 +452,7 @@ func textToBinding(_ t: String) -> Binding {
         default: break
         }
     }
-    return Binding(key: key, mods: mods.isEmpty ? nil : mods, shell: nil)
+    return Binding(key: key, mods: mods.isEmpty ? nil : mods, shell: nil, text: nil)
 }
 
 // MARK: - App
@@ -482,15 +622,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             let label = NSTextField(labelWithString: "G\(i + 1)")
             label.font = NSFont.monospacedSystemFont(ofSize: 13, weight: .medium)
             let tf = NSTextField(string: "")
-            tf.placeholderString = "例如 f13、cmd+shift+4、shell:open -a Safari"
-            tf.widthAnchor.constraint(equalToConstant: 300).isActive = true
+            tf.placeholderString = "f13 / cmd+shift+4 / text:111111 / shell:open -a Safari"
+            tf.widthAnchor.constraint(equalToConstant: 268).isActive = true
             fields.append(tf)
             let rec = NSButton(title: "录制", target: self, action: #selector(startRecording(_:)))
             rec.tag = i
             rec.bezelStyle = .rounded
             rec.toolTip = "点一下，然后按下想绑定的键（Esc 取消，Delete 清空）"
             recordButtons.append(rec)
-            grid.addRow(with: [label, tf, rec])
+            let txt = NSButton(title: "文本", target: self, action: #selector(editTextMacro(_:)))
+            txt.tag = i
+            txt.bezelStyle = .rounded
+            txt.toolTip = "输入一段文字（例如 111111），按这个 G 键时会依次自动输入"
+            grid.addRow(with: [label, tf, rec, txt])
         }
 
         let buttons = NSStackView()
@@ -506,7 +650,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         buttons.addArrangedSubview(reset)
         buttons.addArrangedSubview(openCfg)
 
-        let hint = NSTextField(wrappingLabelWithString: "说明：点「录制」后直接按键盘组合键，会自动填入（Esc 取消，Delete 清空）。G1–G6 默认 F13–F18，M1/M2/M3 切换档位。键名支持 f1–f20、字母、数字、方向键、numpad；以 shell: 开头则执行命令。录制或保存后立即生效，无需重启。")
+        let hint = NSTextField(wrappingLabelWithString: "说明：点「录制」后直接按键盘组合键，会自动填入（Esc 取消，Delete 清空）。想让按一次 G 键自动打出多个字符（例如 111111），点「文本」按钮输入内容，或手动填 text:111111；换行用 \\n 表示，字符间隔由配置里的 typeIntervalMs 控制（默认 15ms）。以 shell: 开头则执行命令。G1–G6 默认 F13–F18，M1/M2/M3 切换档位。保存后立即生效，无需重启。")
         hint.translatesAutoresizingMaskIntoConstraints = false
         hint.font = NSFont.systemFont(ofSize: 11)
         hint.textColor = .secondaryLabelColor
@@ -525,6 +669,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             hint.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -16)
         ])
         loadFields(profile: "1")
+    }
+
+    // MARK: - 文本宏编辑
+
+    @objc func editTextMacro(_ sender: NSButton) {
+        let i = sender.tag
+        guard i < fields.count else { return }
+        stopRecording(cancel: true)
+        let current = textToBinding(fields[i].stringValue).text ?? ""
+        let alert = NSAlert()
+        alert.messageText = "G\(i + 1) · 文本宏"
+        alert.informativeText = "按下 G\(i + 1) 时会依次自动输入下面的内容。\n支持中文等任意字符；需要换行时输入 \\n。"
+        let tf = NSTextField(frame: NSRect(x: 0, y: 0, width: 320, height: 24))
+        tf.stringValue = current
+        tf.placeholderString = "例如 111111"
+        alert.accessoryView = tf
+        alert.addButton(withTitle: "确定")
+        alert.addButton(withTitle: "取消")
+        alert.window.initialFirstResponder = tf
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        let s = tf.stringValue
+        fields[i].stringValue = s.isEmpty ? "" : "text:" + escapeTextField(s)
+        finishRecording(index: i)
+        log("text macro for G\(i + 1): \(fields[i].stringValue)")
     }
 
     // MARK: - 录制按键
@@ -677,6 +845,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 }
 
 // MARK: - main
+// 自检：G710Keys --describe-text "111111" 会打印文本宏合成出的按键事件
+if let idx = CommandLine.arguments.firstIndex(of: "--describe-text"), idx + 1 < CommandLine.arguments.count {
+    print(describeTextEvents(CommandLine.arguments[idx + 1]))
+    exit(0)
+}
 let app = NSApplication.shared
 let appDelegate = AppDelegate()
 app.delegate = appDelegate

@@ -30,7 +30,9 @@ key recording.
 
 ## Features
 
-* **G1–G6 → anything**: F13–F18 by default; remap to any key, ⌘/⌃/⌥/⇧ combo, or a shell command.
+* **G1–G6 → anything**: F13–F18 by default; remap to any key, ⌘/⌃/⌥/⇧ combo, a text macro, or a shell command.
+* **Text macros**: one G press can type a whole string — e.g. bind G1 to `text:111111` and the system
+  receives six separate `1` key presses (configurable inter-key delay).
 * **3 profiles (M1/M2/M3)** on the keyboard, with the M LEDs kept in sync.
 * **Record button**: click Record next to a row, press the combo you want (e.g. ⌘C), done.
 * **Long-press repeat** while a G key is held.
@@ -69,9 +71,14 @@ macOS protects HID devices and synthetic key events, so the app needs **two** pe
 Enable **G710Keys** in **System Settings → Privacy & Security → Input Monitoring / Accessibility**,
 then quit and relaunch the app (there is a “Restart after granting” button in the window).
 
-> ⚠️ The app is **ad-hoc signed**. Rebuilding or re-signing the binary changes its code signature,
-> and macOS invalidates the two permissions above — you have to toggle them again in System
-> Settings. Editing the config does not affect permissions.
+> ⚠️ By default the app is **ad-hoc signed**. Rebuilding or re-signing the binary changes its code
+> signature, and macOS invalidates the two permissions above — you have to toggle them again in
+> System Settings. Editing the config does not affect permissions.
+>
+> If you have an Apple Development certificate you can avoid that for good:
+> `CODESIGN_IDENTITY="Apple Development: Your Name (TEAMID)" ./scripts/build.sh`.
+> The privacy requirement then points at the certificate instead of the binary hash, so rebuilding
+> keeps the existing grants.
 
 ## Usage
 
@@ -84,9 +91,15 @@ then quit and relaunch the app (there is a “Restart after granting” button i
    |---|---|
    | F13 | `f13` |
    | ⌘⇧4 (screenshot) | `cmd+shift+4` |
+   | Type "111111" | `text:111111` (or click the “文本” / text button) |
    | Open Safari | `shell:open -a Safari` |
 
 5. Press the G key.
+
+Text macros are typed character by character as individual key events (15 ms apart by default; change
+`typeIntervalMs` in the config to tune it). ASCII is sent as real key presses (with Shift when needed),
+anything else (Chinese, emoji, …) is sent as a Unicode event. `\n` and `\t` are supported inside
+`text:` values.
 
 Supported key names: `a`–`z`, `0`–`9`, `f1`–`f20`, `numpad0`–`numpad9`,
 `left`/`right`/`up`/`down`, `home`/`end`/`pageup`/`pagedown`,
